@@ -11,7 +11,9 @@ export class MCPProtocolService {
 
   initializeTools() {
     return [
- 
+      // ========================================
+      // NAVIGATION TOOLS
+      // ========================================
       {
         name: 'playwright_navigate',
         description: 'Navigate to a URL',
