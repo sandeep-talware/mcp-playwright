@@ -1,3 +1,7 @@
+/**
+ * @author Sandeep Talware
+ */
+
 export const config = {
   // Server connection settings
   server: {
