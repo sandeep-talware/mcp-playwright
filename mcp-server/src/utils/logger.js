@@ -1,3 +1,7 @@
+/**
+ * @author Sandeep Talware
+ */
+
 export class Logger {
   constructor(context = 'Server') {
     this.context = context;
