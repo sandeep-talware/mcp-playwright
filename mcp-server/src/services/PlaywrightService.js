@@ -1,3 +1,7 @@
+/**
+ * @author Sandeep Talware
+ */
+
 import { chromium } from 'playwright';
 import { Logger } from '../utils/logger.js';
 import { config } from '../config/config.js';
@@ -457,6 +461,22 @@ export class PlaywrightService {
     await this.page.locator(selector).scrollIntoViewIfNeeded();
     return { status: 'success', selector };
   }
+  async dragAndDrop(sourceSelector, targetSelector) {
+    this.logger.info('Performing drag and drop', { sourceSelector, targetSelector });
+    await this.page.dragAndDrop(sourceSelector, targetSelector);
+    return { status: 'success', sourceSelector, targetSelector };
+  }
+
+  async dragAndDropByCoordinates(selector, targetX, targetY) {
+    this.logger.info('Dragging element to coordinates', { selector, targetX, targetY });
+    const element = await this.page.locator(selector);
+    await element.dragTo(this.page.locator('body'), {
+      targetPosition: { x: targetX, y: targetY }
+    });
+    return { status: 'success', selector, targetX, targetY };
+  }
+
+
 
   // ========================================
   // ALERTS & DIALOGS
@@ -536,7 +556,141 @@ export class PlaywrightService {
     this.logger.info('Getting all frames');
     const frames = this.page.frames();
     return { status: 'success', count: frames.length };
+  }// New Phase 2 methods to append to PlaywrightService.js
+
+  // ========================================
+  // NETWORK CONTROL (Phase 2)
+  // ========================================
+
+  async routeRequest(urlPattern, handler) {
+    this.logger.info('Setting up request routing', { urlPattern });
+    await this.page.route(urlPattern, async (route) => {
+      if (handler === 'abort') {
+        await route.abort();
+      } else if (handler === 'continue') {
+        await route.continue();
+      } else if (typeof handler === 'object') {
+        // Mock response
+        await route.fulfill(handler);
+      } else {
+        await route.continue();
+      }
+    });
+    return { status: 'success', urlPattern };
   }
+
+  async abortRequest(urlPattern) {
+    this.logger.info('Aborting requests', { urlPattern });
+    await this.page.route(urlPattern, route => route.abort());
+    return { status: 'success', urlPattern };
+  }
+
+  async getNetworkActivity() {
+    this.logger.info('Getting network activity');
+    // Note: This requires setting up listeners beforehand
+    // For now, return a placeholder
+    return { 
+      status: 'success', 
+      message: 'Network monitoring requires setup during context creation' 
+    };
+  }
+
+  // ========================================
+  // ADVANCED DEBUGGING (Phase 2)
+  // ========================================
+
+  async setupConsoleCapture() {
+    this.logger.info('Setting up console capture');
+    if (!this.consoleLogs) {
+      this.consoleLogs = [];
+    }
+    this.page.on('console', msg => {
+      this.consoleLogs.push({
+        type: msg.type(),
+        text: msg.text(),
+        timestamp: new Date().toISOString()
+      });
+    });
+    return { status: 'success', message: 'Console capture enabled' };
+  }
+
+  async getConsoleLogs() {
+    this.logger.info('Getting console logs');
+    return { 
+      status: 'success', 
+      logs: this.consoleLogs || [],
+      count: this.consoleLogs ? this.consoleLogs.length : 0
+    };
+  }
+
+  async clearConsoleLogs() {
+    this.logger.info('Clearing console logs');
+    this.consoleLogs = [];
+    return { status: 'success', message: 'Console logs cleared' };
+  }
+
+  async startTracing(options = {}) {
+    this.logger.info('Starting tracing');
+    await this.context.tracing.start({
+      screenshots: true,
+      snapshots: true,
+      ...options
+    });
+    return { status: 'success', message: 'Tracing started' };
+  }
+
+  async stopTracing(path) {
+    this.logger.info('Stopping tracing', { path });
+    await this.context.tracing.stop({ path });
+    return { status: 'success', path };
+  }
+
+  // ========================================
+  // SYSTEM & ENVIRONMENT (Phase 2)
+  // ========================================
+
+  async setGeolocation(latitude, longitude) {
+    this.logger.info('Setting geolocation', { latitude, longitude });
+    await this.context.setGeolocation({ latitude, longitude });
+    return { status: 'success', latitude, longitude };
+  }
+
+  async grantPermissions(permissions) {
+    this.logger.info('Granting permissions', { permissions });
+    await this.context.grantPermissions(permissions);
+    return { status: 'success', permissions };
+  }
+
+  async clearPermissions() {
+    this.logger.info('Clearing permissions');
+    await this.context.clearPermissions();
+    return { status: 'success', message: 'Permissions cleared' };
+  }
+
+  async setTimezone(timezoneId) {
+    this.logger.info('Setting timezone', { timezoneId });
+    // Note: Timezone must be set during context creation
+    // This is a limitation of Playwright
+    return { 
+      status: 'warning', 
+      message: 'Timezone must be set during browser context creation',
+      timezoneId 
+    };
+  }
+
+  // ========================================
+  // ACCESSIBILITY (Phase 2)
+  // ========================================
+
+  async getAccessibilitySnapshot(selector = null) {
+    this.logger.info('Getting accessibility snapshot', { selector });
+    const snapshot = selector 
+      ? await this.page.locator(selector).ariaSnapshot()
+      : await this.page.ariaSnapshot();
+    return { status: 'success', snapshot };
+  }
+
+
 
   // ========================================
   // CLEANUP
