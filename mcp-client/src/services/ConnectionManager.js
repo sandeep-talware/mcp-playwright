@@ -1,3 +1,7 @@
+/**
+ * @author Sandeep Talware
+ */
+
 import WebSocket from 'ws';
 import { Logger } from '../utils/logger.js';
 import { config } from '../config/config.js';
