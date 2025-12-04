@@ -1,3 +1,7 @@
+/**
+ * @author Sandeep Talware
+ */
+
 import { ConnectionManager } from './services/ConnectionManager.js';
 import { RequestService } from './services/RequestService.js';
 import { Logger } from './utils/logger.js';
@@ -29,7 +33,8 @@ class MCPClient {
     try {
       this.logger.info('Running example automation');
 
-      await this.requestService.navigate('https://example.com');
+      // await this.requestService.navigate('https://example.com');
+      await this.requestService.navigate('https://google.com');
       const text = await this.requestService.getText('h1');
       this.logger.info('Got text', text);
 
