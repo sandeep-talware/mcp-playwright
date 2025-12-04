@@ -1,3 +1,7 @@
+/**
+ * @author Sandeep Talware
+ */
+
 import { config } from '../config/config.js';
 
 export class Logger {
