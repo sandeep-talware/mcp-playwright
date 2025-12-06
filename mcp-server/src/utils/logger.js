@@ -7,6 +7,23 @@ export class Logger {
     this.context = context;
   }
 
+  /**
+   * Creates a circular reference safe JSON stringifier
+   * @private
+   */
+  _getCircularReplacer() {
+    const seen = new WeakSet();
+    return (key, value) => {
+      if (typeof value === 'object' && value !== null) {
+        if (seen.has(value)) {
+          return '[Circular]';
+        }
+        seen.add(value);
+      }
+      return value;
+    };
+  }
+
   info(message, data = {}) {
     console.log(JSON.stringify({
       level: 'INFO',
@@ -14,7 +31,7 @@ export class Logger {
       message,
       data,
       timestamp: new Date().toISOString()
-    }));
+    }, this._getCircularReplacer()));
   }
 
   error(message, error = {}) {
@@ -25,7 +42,7 @@ export class Logger {
       error: error.message || error,
       stack: error.stack,
       timestamp: new Date().toISOString()
-    }));
+    }, this._getCircularReplacer()));
   }
 
   debug(message, data = {}) {
@@ -35,6 +52,6 @@ export class Logger {
       message,
       data,
       timestamp: new Date().toISOString()
-    }));
+    }, this._getCircularReplacer()));
   }
 }
