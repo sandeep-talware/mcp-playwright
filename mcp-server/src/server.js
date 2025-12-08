@@ -2,8 +2,12 @@
  * @author Sandeep Talware
  */
 
+import 'dotenv/config';
+import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
+import { randomUUID } from 'crypto';
 import { PlaywrightService } from './services/PlaywrightService.js';
+import { SessionManager } from './services/SessionManager.js';
 import { MCPProtocolService } from './services/MCPProtocolService.js';
 import { MCPController } from './controllers/MCPController.js';
 import { Logger } from './utils/logger.js';
@@ -13,8 +17,11 @@ class MCPServer {
   constructor() {
     this.logger = new Logger('MCPServer');
     this.playwrightService = new PlaywrightService();
-    this.mcpProtocolService = new MCPProtocolService(this.playwrightService);
-    this.mcpController = new MCPController(this.mcpProtocolService);
+    this.sessionManager = new SessionManager(this.playwrightService);
+
+    // Dedicated controller for HTTP interactions
+    this.httpController = null;
+    this.httpSessionId = 'http-defaults';
   }
 
   async start() {
@@ -28,100 +35,124 @@ class MCPServer {
       browserInitialized = true;
       this.logger.info('Browser initialized successfully');
 
-      // Start WebSocket server
-      this.logger.info('Starting WebSocket server...');
-      this.wss = new WebSocketServer({
-        port: config.server.port,
-        host: config.server.host
+      // Initialize defaults for HTTP session
+      const httpSession = await this.sessionManager.createSession(this.httpSessionId);
+      const httpProtocol = new MCPProtocolService(httpSession);
+      this.httpController = new MCPController(httpProtocol);
+
+      // Create HTTP Server
+      this.logger.info('Starting HTTP server...');
+      this.httpServer = createServer(async (req, res) => {
+        if (req.method === 'POST') {
+          let body = '';
+          req.on('data', chunk => { body += chunk.toString(); });
+          req.on('end', async () => {
+            this.logger.info('Received HTTP POST request');
+            // Use the shared HTTP controller
+            await this.httpController.handleMessage(body, (response) => {
+              res.writeHead(200, { 'Content-Type': 'application/json' });
+              res.end(response);
+            });
+          });
+        } else {
+          res.writeHead(200, { 'Content-Type': 'text/plain' });
+          res.end('MCP Server is running');
+        }
       });
+
+      // Start WebSocket server attached to HTTP server
+      this.logger.info('Starting WebSocket server...');
+      this.wss = new WebSocketServer({ server: this.httpServer });
       serverStarted = true;
 
       this.wss.on('connection', (ws) => {
-        this.logger.info('Client connected');
+        const connectionId = randomUUID();
+        this.logger.info('Client connected via WebSocket', { connectionId });
 
-        ws.on('message', (message) => {
-          this.mcpController.handleMessage(ws, message.toString());
+        // Start session creation immediately but await it in handlers to avoid race conditions
+        const sessionPromise = (async () => {
+          try {
+            const session = await this.sessionManager.createSession(connectionId);
+            const protocolService = new MCPProtocolService(session);
+            const controller = new MCPController(protocolService);
+            return controller;
+          } catch (error) {
+            this.logger.error('Failed to initialize client session', { connectionId, error });
+            ws.close(1011, 'Session initialization failed');
+            throw error;
+          }
+        })();
+
+        ws.on('message', async (message) => {
+          try {
+            const controller = await sessionPromise;
+            if (!controller) return;
+
+            controller.handleMessage(message.toString(), (response) => {
+              if (ws.readyState === 1) { // OPEN
+                ws.send(response);
+              }
+            });
+          } catch (error) {
+            // Error already handled in sessionPromise
+          }
         });
 
         ws.on('close', () => {
-          this.logger.info('Client disconnected');
+          this.logger.info('Client disconnected', { connectionId });
+          sessionPromise.then(() => {
+            this.sessionManager.closeSession(connectionId);
+          }).catch(() => { });
         });
 
         ws.on('error', (error) => {
-          this.logger.error('WebSocket error', error);
+          this.logger.error('WebSocket error', { connectionId, error });
         });
       });
 
-      this.logger.info(`MCP Server started on ${config.server.host}:${config.server.port}`);
+      // Listen on the configured port
+      this.httpServer.listen(config.server.port, config.server.host, () => {
+        this.logger.info(`MCP Server listening on http://${config.server.host}:${config.server.port}`);
+      });
+
     } catch (error) {
       this.logger.error('Failed to start server', error);
 
-      // Rollback: Clean up resources based on what was initialized
       if (serverStarted && this.wss) {
-        try {
-          this.logger.info('Rolling back: Closing WebSocket server...');
-          await new Promise((resolve) => this.wss.close(resolve));
-        } catch (cleanupError) {
-          this.logger.error('Error closing WebSocket server during rollback', cleanupError);
-        }
+        await new Promise(r => this.wss.close(r));
       }
-
+      if (this.httpServer && this.httpServer.listening) {
+        await new Promise(r => this.httpServer.close(r));
+      }
       if (browserInitialized) {
-        try {
-          this.logger.info('Rolling back: Closing Playwright browser...');
-          await this.playwrightService.close();
-        } catch (cleanupError) {
-          this.logger.error('Error closing browser during rollback', cleanupError);
-        }
+        await this.playwrightService.close();
       }
-
       process.exit(1);
     }
   }
 
-  /**
-   * Gracefully stops the MCP server
-   * Notifies clients, closes connections, and cleans up resources
-   * @returns {Promise<void>}
-   */
   async stop() {
     this.logger.info('Initiating graceful shutdown');
 
     if (this.wss) {
-      // Notify all connected clients
       this.wss.clients.forEach((client) => {
-        if (client.readyState === 1) { // WebSocket.OPEN
-          try {
-            client.send(JSON.stringify({
-              jsonrpc: '2.0',
-              method: 'server/shutdown',
-              params: { reason: 'Server shutting down' }
-            }));
-          } catch (error) {
-            this.logger.error('Error notifying client', error);
-          }
-        }
-      });
-
-      // Close all connections
-      this.wss.clients.forEach((client) => {
-        try {
+        if (client.readyState === 1) {
+          client.send(JSON.stringify({
+            jsonrpc: '2.0',
+            method: 'server/shutdown',
+            params: { reason: 'Server shutting down' }
+          }));
           client.close(1000, 'Server shutdown');
-        } catch (error) {
-          this.logger.error('Error closing client connection', error);
         }
       });
-
-      // Close WebSocket server
-      await new Promise((resolve) => {
-        this.wss.close(() => {
-          this.logger.info('WebSocket server closed');
-          resolve();
-        });
-      });
+      await new Promise(r => this.wss.close(r));
     }
 
-    // Close Playwright browser
+    if (this.httpServer) {
+      await new Promise(r => this.httpServer.close(r));
+    }
+
+    await this.sessionManager.closeAll();
     await this.playwrightService.close();
     this.logger.info('Server shutdown complete');
   }
@@ -130,15 +161,10 @@ class MCPServer {
 const server = new MCPServer();
 server.start();
 
-/**
- * Graceful shutdown handler
- * @param {string} signal - The signal received
- */
 const gracefulShutdown = async (signal) => {
   console.log(`\nReceived ${signal}, initiating graceful shutdown...`);
   try {
     await server.stop();
-    console.log('Server stopped gracefully');
     process.exit(0);
   } catch (error) {
     console.error('Error during shutdown:', error);
@@ -146,33 +172,6 @@ const gracefulShutdown = async (signal) => {
   }
 };
 
-// Handle termination signals
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
-
-// SIGHUP is not available on Windows, only register on Unix-like systems
-if (process.platform !== 'win32') {
-  process.on('SIGHUP', () => gracefulShutdown('SIGHUP'));
-}
-
-// Handle uncaught exceptions
-process.on('uncaughtException', async (error) => {
-  console.error('Uncaught exception:', error);
-  try {
-    await server.stop();
-  } catch (stopError) {
-    console.error('Error stopping server after uncaught exception:', stopError);
-  }
-  process.exit(1);
-});
-
-// Handle unhandled promise rejections
-process.on('unhandledRejection', async (reason, promise) => {
-  console.error('Unhandled rejection at:', promise, 'reason:', reason);
-  try {
-    await server.stop();
-  } catch (stopError) {
-    console.error('Error stopping server after unhandled rejection:', stopError);
-  }
-  process.exit(1);
-});
+if (process.platform !== 'win32') process.on('SIGHUP', () => gracefulShutdown('SIGHUP'));

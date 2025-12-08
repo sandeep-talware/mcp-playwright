@@ -18,7 +18,7 @@ export class ConnectionManager {
     return new Promise((resolve, reject) => {
       try {
         this.logger.info('Connecting to MCP server', { url: config.server.url });
-        
+
         this.ws = new WebSocket(config.server.url);
 
         this.ws.on('open', () => {
@@ -62,7 +62,7 @@ export class ConnectionManager {
     }
   }
 
-  send(message, handler) {
+  send(message, timeout = config.connection.responseTimeout) {
     return new Promise((resolve, reject) => {
       if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
         reject(new Error('Not connected to server'));
@@ -72,7 +72,16 @@ export class ConnectionManager {
       const id = Date.now();
       const request = { ...message, id, jsonrpc: '2.0' };
 
+      // Setup timeout
+      const timeoutId = setTimeout(() => {
+        if (this.messageHandlers.has(id)) {
+          this.messageHandlers.delete(id);
+          reject(new Error(`Request timed out after ${timeout}ms`));
+        }
+      }, timeout);
+
       this.messageHandlers.set(id, (response) => {
+        clearTimeout(timeoutId);
         if (response.error) {
           reject(new Error(response.error.message));
         } else {
@@ -102,6 +111,12 @@ export class ConnectionManager {
   }
 
   disconnect() {
+    // Clean up all pending requests
+    for (const [id, handler] of this.messageHandlers.entries()) {
+      handler({ error: { message: 'Connection closed' } });
+    }
+    this.messageHandlers.clear();
+
     if (this.ws) {
       this.ws.close();
     }

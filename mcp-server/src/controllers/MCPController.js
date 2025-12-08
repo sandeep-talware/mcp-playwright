@@ -10,18 +10,18 @@ export class MCPController {
     this.logger = new Logger('MCPController');
   }
 
-  async handleMessage(ws, message) {
+  async handleMessage(message, sendCallback) {
     try {
       const request = JSON.parse(message);
       this.logger.info('Received MCP message', { method: request.method });
-      
+
       const response = await this.mcpProtocolService.handleRequest(request);
-      
-      ws.send(JSON.stringify(response));
+
+      sendCallback(JSON.stringify(response));
       this.logger.info('Sent MCP response', { id: request.id });
     } catch (error) {
       this.logger.error('Error handling message', error);
-      ws.send(JSON.stringify({
+      sendCallback(JSON.stringify({
         jsonrpc: '2.0',
         id: null,
         error: {
